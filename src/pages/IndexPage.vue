@@ -39,6 +39,54 @@
         </q-card-actions>
       </q-card>
       
+      <!-- 性能监控 -->
+      <q-card class="q-mb-md">
+        <q-card-section>
+          <div class="text-h6">性能监控</div>
+          <div class="row items-center q-mt-sm q-gutter-md">
+            <div class="row items-center">
+              <q-icon 
+                :name="performanceInfo.isElectron ? 'flash_on' : 'wifi'" 
+                :color="performanceInfo.isElectron ? 'orange' : 'blue'" 
+                size="sm" 
+                class="q-mr-sm"
+              />
+              <span>通信: {{ performanceInfo.communicationMethod }}</span>
+            </div>
+            <div class="row items-center">
+              <q-icon 
+                name="speed" 
+                color="green" 
+                size="sm" 
+                class="q-mr-sm"
+              />
+              <span>延迟: {{ performanceInfo.expectedLatency }}</span>
+            </div>
+            <div v-if="averageResponseTime > 0" class="row items-center">
+              <q-icon 
+                name="timer" 
+                color="purple" 
+                size="sm" 
+                class="q-mr-sm"
+              />
+              <span>平均响应: {{ averageResponseTime }}ms</span>
+            </div>
+          </div>
+          <div class="q-mt-sm">
+            <q-chip 
+              v-for="advantage in performanceInfo.advantages" 
+              :key="advantage"
+              :color="performanceInfo.isElectron ? 'orange' : 'blue'"
+              text-color="white"
+              size="sm"
+              class="q-mr-xs q-mb-xs"
+            >
+              {{ advantage }}
+            </q-chip>
+          </div>
+        </q-card-section>
+      </q-card>
+      
       <!-- 连接状态 -->
       <q-card class="q-mb-md">
         <q-card-section>
@@ -206,7 +254,7 @@
 <script>
 import { defineComponent, ref, onMounted, computed } from 'vue'
 import { useQuasar } from 'quasar'
-import apiService from '../services/api.js'
+import smartApiService from '../services/smart-api.js'
 
 export default defineComponent({
   name: 'IndexPage',
@@ -227,6 +275,10 @@ export default defineComponent({
       deviceConnected: false
     })
     
+    // 性能监控
+    const performanceInfo = ref(smartApiService.getPerformanceInfo())
+    const commandTimes = ref([])
+    
     // 预设速度
     const speedPresets = [0, 30, 60, 80, 100, 120, 150]
     
@@ -235,20 +287,36 @@ export default defineComponent({
       return isConnected.value && isTestModeEnabled.value
     })
     
+    // 平均响应时间
+    const averageResponseTime = computed(() => {
+      if (commandTimes.value.length === 0) return 0
+      const sum = commandTimes.value.reduce((a, b) => a + b, 0)
+      return Math.round(sum / commandTimes.value.length)
+    })
+    
     // 检查速度是否有效
     const isValidSpeed = (speed) => {
       return speed >= 0 && speed <= 300 && !isNaN(speed)
     }
     
     // 添加命令到历史记录
-    const addToHistory = (command, success = true, output = '', error = '') => {
+    const addToHistory = (command, success = true, output = '', error = '', duration = 0) => {
       commandHistory.value.unshift({
         command,
         success,
         output,
         error,
+        duration,
         timestamp: new Date().toLocaleTimeString()
       })
+      
+      // 记录响应时间
+      if (success && duration > 0) {
+        commandTimes.value.unshift(duration)
+        if (commandTimes.value.length > 20) {
+          commandTimes.value.pop()
+        }
+      }
       
       // 限制历史记录数量
       if (commandHistory.value.length > 50) {
@@ -270,13 +338,17 @@ export default defineComponent({
       
       try {
         console.log(`[BOWEN_LOG] 🚀 执行速度命令: ${value}`);
-        const response = await apiService.executeVehicleCommand('VehSpd', value)
+        const startTime = performance.now()
+        const response = await smartApiService.executeVehicleCommand('VehSpd', value)
+        const endTime = performance.now()
+        const duration = Math.round(endTime - startTime)
+        
         if (response.success) {
-          addToHistory(response.data.command, true, response.data.output)
+          addToHistory(response.data.command, true, response.data.output, '', duration)
           // 只在控制台记录成功，不显示通知避免过多提示
-          console.log(`[BOWEN_LOG] ✅ 车速设置成功: ${value} km/h`);
+          console.log(`[BOWEN_LOG] ✅ 车速设置成功: ${value} km/h (${duration}ms)`);
         } else {
-          addToHistory(response.data?.command || `VehSpd:${value}`, false, '', response.message)
+          addToHistory(response.data?.command || `VehSpd:${value}`, false, '', response.message, duration)
           $q.notify({
             type: 'negative',
             message: response.message
@@ -320,16 +392,20 @@ export default defineComponent({
       
       try {
         console.log(`[BOWEN_LOG] 🚀 立即执行速度命令: ${value}`);
-        const response = await apiService.executeVehicleCommand('VehSpd', value)
+        const startTime = performance.now()
+        const response = await smartApiService.executeVehicleCommand('VehSpd', value)
+        const endTime = performance.now()
+        const duration = Math.round(endTime - startTime)
+        
         if (response.success) {
-          addToHistory(response.data.command, true, response.data.output)
+          addToHistory(response.data.command, true, response.data.output, '', duration)
           $q.notify({
             type: 'positive',
-            message: `车速已设置为 ${value} km/h`,
+            message: `车速已设置为 ${value} km/h (${duration}ms)`,
             timeout: 1000
           })
         } else {
-          addToHistory(response.data?.command || `VehSpd:${value}`, false, '', response.message)
+          addToHistory(response.data?.command || `VehSpd:${value}`, false, '', response.message, duration)
           $q.notify({
             type: 'negative',
             message: response.message
@@ -355,7 +431,7 @@ export default defineComponent({
     const refreshStatus = async () => {
       refreshingStatus.value = true
       try {
-        const response = await apiService.getStatus()
+        const response = await smartApiService.getStatus()
         if (response.success) {
           serverStatus.value = response.data
           isConnected.value = response.data.isAdbConnected
@@ -379,7 +455,7 @@ export default defineComponent({
       try {
         if (isConnected.value) {
           // 断开连接
-          const response = await apiService.disconnectAdb()
+          const response = await smartApiService.disconnectAdb()
           if (response.success) {
             isConnected.value = false
             isTestModeEnabled.value = false
@@ -391,7 +467,7 @@ export default defineComponent({
           }
         } else {
           // 连接设备
-          const response = await apiService.connectAdb()
+          const response = await smartApiService.connectAdb()
           if (response.success) {
             isConnected.value = true
             addToHistory(response.data.command, true, response.message)
@@ -420,7 +496,7 @@ export default defineComponent({
       enablingTestMode.value = true
       
       try {
-        const response = await apiService.enableTestMode()
+        const response = await smartApiService.enableTestMode()
         if (response.success) {
           isTestModeEnabled.value = true
           addToHistory(response.data.command, true, response.data.output)
@@ -489,7 +565,9 @@ export default defineComponent({
       enableTestMode,
       onSpeedChange,
       setSpeedImmediately,
-      clearHistory
+      clearHistory,
+      performanceInfo,
+      averageResponseTime
     }
   }
 })

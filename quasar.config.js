@@ -108,6 +108,12 @@ module.exports = configure(function (ctx) {
       },
       builder: {
         appId: 'vhal-controller'
+      },
+      extendElectronMainConf (cfg) {
+        cfg.entryPoints = ['src-electron/electron-main.js']
+      },
+      extendElectronPreloadConf (cfg) {
+        cfg.entryPoints = ['src-electron/electron-preload.js']
       }
     }
   }
